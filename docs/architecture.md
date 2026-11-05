@@ -6,6 +6,17 @@ Requirements and architecture are defined from the supplied Company A brief.
 The workspace was empty at inspection time; no existing application, framework,
 or behavior needs to be preserved. This document is the milestone-1 baseline.
 
+Milestone 4 adds a responsive authenticated operations workspace backed by
+server-guarded APIs and PostgreSQL queries. The core dashboard, import/mapping
+workflow, order ledger, reconciliation execution/results, claims, exception
+review, and audit history are implemented. Milestone 5 adds a configurable,
+advisory AI mapping path with deterministic fallback and a human-reviewed
+missing-order candidate workflow. A server-only S3-compatible storage adapter
+is also implemented; its private configuration and production fail-closed
+behavior have mocked test coverage, but no real bucket or deployment is
+configured. See `docs/final-gap-audit.md` and `../deployment.md` for remaining
+release constraints.
+
 ## Problem and users
 
 Company A is a Bengaluru-based D2C home-textiles brand selling on its own
@@ -170,27 +181,61 @@ overwriting financial evidence.
    100,000-row benchmark and recorded hardware/database configuration; the
    threshold is not considered met by a smaller test.
 
-## Screen plan
+## Product screens and integration
 
-Seven focused screens cover the core without turning the product into generic
-CRUD:
+The current interface stays focused on operational tasks rather than generic
+administration:
 
-1. **Money at risk:** partner and age summary, linked to underlying cases.
-2. **Imports:** upload history, file type, partner/source, row count, and
-   processing/error status.
-3. **Column mapping:** field mapping, 20-row preview, validation, AI
-   suggestions, approval, version history, and rollback.
-4. **Order reconciliation:** searchable/filterable order table, status,
-   expected/received/difference, and calculation evidence.
-5. **Rate cards:** partner/channel/courier rates, effective dates, and
-   version-aware review.
-6. **Claims:** partner-grouped short/late/overcharge cases, evidence detail,
-   review state, and export.
-7. **Suggested-match review:** missing-ID candidates with evidence and
-   explicit accept/reject actions.
+1. **Overview:** persisted order totals, payment receipts, latest completed-run
+   exposure, open exception exposure, COD outcome counts, age buckets by
+   partner/currency, and recent runs.
+2. **Imports:** authorized CSV/XLSX upload, column mapping, normalized preview,
+   server-side approval, validation summary, duplicate recognition, saved
+   mapping versions/rollback, and paginated batch history.
+3. **Orders:** searchable and filterable channel order ledger with deterministic
+   latest outcomes; sort is performed by the database.
+4. **Reconciliation:** select completed source batches, run the idempotent
+   engine, filter persisted results, and inspect explanations and linked
+   transaction references.
+5. **Match review:** review deterministic missing-order candidates, competing
+   signals, and reasons; explicitly accept or reject. Acceptance links one
+   transaction in a guarded transaction, audits the decision, and does not
+   close the exception.
+6. **Claims:** supported claim worklist, evidence snapshot and source-row
+   provenance, status filter, and CSV export.
+7. **Exceptions:** searchable lifecycle queue, evidence detail, and
+   permission-checked transitions with resolution notes and audit events.
+8. **Audit trail:** paginated, read-only record of important financial
+   operations.
 
-The optional return tracker and detailed TCS/TDS partner summary can be added
-without changing the deterministic reconciliation core.
+The dashboard keeps amounts grouped by currency and labels whether the figure
+is gross order value, received settlement/COD net, latest-run supported claim
+exposure, or currently open exception exposure. It does not sum unlike
+currencies. Customer names, phone numbers, and addresses are not displayed.
+Operational queries are uncached and authorized on the server.
+
+Mapping suggestions use a configurable server-side OpenAI-compatible provider
+when configured. Only source headers, import kind, and allowed destination
+field metadata are sent; no sample rows or customer data are sent. The output
+is schema-validated and uncertain/unsupported columns remain unmapped.
+Suggestions are advisory and require a human-reviewed mapping preview and
+explicit import approval. If credentials are absent or a provider request
+fails, the UI labels deterministic exact-header suggestions and explains the
+fallback; no AI result is fabricated.
+
+Missing-order candidate generation uses exact currency, a 30-day order-to-
+transaction window, exact source-reference and amount signals, and a
+comparable channel-partner signal where available. Ambiguous competing
+candidates are shown together; more than 200 candidates for one transaction
+is withheld and reported as too ambiguous. Only an authorized, explicitly
+confirmed decision can link one transaction. Rejections/acceptance are audited;
+acceptance does not resolve the exception, and a changed link set produces a
+new idempotent reconciliation run rather than rewriting the prior result.
+No match is forced or auto-approved.
+
+No rate-card editor is provided because there is no rate-card management
+service/API. Returns/refunds and TCS/TDS remain optional depth; no warehouse
+integration or tax filing is implied.
 
 ## Prioritized implementation checklist
 
@@ -205,31 +250,68 @@ without changing the deterministic reconciliation core.
 
 ### Milestone 2 — Foundation
 
-- [ ] Scaffold the strict-TypeScript Next.js app and test/lint/build commands.
-- [ ] Provision PostgreSQL and create the minimal relational schema/migrations.
-- [ ] Implement server-side authentication and the two core roles.
-- [ ] Build the application shell and shared accessible table/form patterns.
+- [x] Scaffold the strict-TypeScript Next.js app and test/lint/build commands.
+- [x] Provision PostgreSQL and create the minimal relational schema/migrations.
+- [x] Implement server-side authentication and the two core roles.
+- [x] Build the application shell and shared accessible table/form patterns.
 - [ ] Decide file storage and import-job execution based on the deployment
   target.
 
+Database foundation details: `prisma/schema.prisma` contains the operational
+models and enums; the initial SQL migration adds additional database CHECK
+constraints for valid money, currency, rate-card periods, row counts, and
+settlement terms. Run `npx prisma migrate dev` for local migration application,
+`npx prisma generate` after schema changes, and `npm run db:seed` to upsert the
+fictional demo records. The seed requires the four `SEED_*` variables in
+`.env`; it updates only the dedicated demo identities and deterministic demo
+fixtures. `SHADOW_DATABASE_URL` points to a separate empty `reconcileos_shadow`
+database used by Prisma migration diffing.
+
+Authentication uses bcrypt-hashed passwords, random opaque session tokens
+stored as SHA-256 hashes, `HttpOnly`/`SameSite=Lax` cookies, server-side
+permission checks, and per-account login throttling. There is no public
+registration flow. Finance executives can operate core finance tasks;
+co-founders have read-only financial oversight pending confirmation of the
+client's detailed permission policy.
+
 ### Milestone 3 — Import and deterministic core
 
-- [ ] Implement CSV/XLSX parsing, staged rows, source mapping versions, 20-row
+- [x] Implement CSV/XLSX parsing, staged rows, source mapping versions, 20-row
   preview/approval, rollback, and validation errors.
-- [ ] Implement effective-dated rate cards and decimal-safe expected amounts.
-- [ ] Implement deterministic, idempotent matching, status classification,
+- [x] Implement effective-dated rate cards and decimal-safe expected amounts.
+- [x] Implement deterministic, idempotent matching, status classification,
   evidence, and audit history.
-- [ ] Add duplicate, split/partial, missing reference, tax deduction, and
+- [x] Add duplicate, split/partial, missing reference, tax deduction, and
   re-run tests before connecting the UI.
-- [ ] Benchmark 100,000 rows under 60 seconds and optimize measured
+- [x] Benchmark 100,000 rows under 60 seconds and optimize measured
   bottlenecks.
 
 ### Milestone 4 — Core operations UI
 
-- [ ] Connect the seven core screens to persisted data and real services.
-- [ ] Implement filters, evidence detail, claims review/export, and suggested
-  match decisions.
-- [ ] Verify keyboard use, responsive layouts, and non-success states.
+- [x] Connect the persisted dashboard, imports/mappings, orders,
+  reconciliation, claims, exception review, and audit-history screens.
+- [x] Add server-side search/filter/pagination, order sorting, evidence detail,
+  claims export, role-gated mutations, and useful loading/empty/error states.
+- [x] Verify TypeScript, lint, integration workflows, and production build.
+- [x] Implement schema-validated, person-approved AI mapping suggestions with
+  server-only configuration and deterministic fallback.
+- [x] Implement missing-order candidate generation, review decisions,
+  transaction linking, and decision audit history.
+- [x] Conduct browser-based keyboard and responsive smoke review.
+
+### Milestone 5 — Final product QA and submission readiness
+
+- [x] Create a requirement-by-requirement final gap audit from the recorded
+  Core Build brief.
+- [x] Add test coverage for mapping-provider fallback, uncertainty, candidate
+  ambiguity, no-match outcomes, authorization, decisions, and reruns.
+- [x] Run Prisma validation, TypeScript, full test suite, ESLint, production
+  build, and browser-based workflow smoke checks.
+- [ ] Complete populated missing-order candidate decisions in the browser and
+  perform a formal accessibility review.
+- [ ] Configure a durable private upload store for the chosen hosting target.
+- [ ] Configure an approved AI provider credential before live-provider
+  acceptance testing; deterministic fallback remains available until then.
 
 ### Milestone 5 — Demo data and optional depth
 
@@ -240,10 +322,12 @@ without changing the deterministic reconciliation core.
 
 ### Milestone 6 — Quality assurance
 
-- [ ] Run unit, integration, and end-to-end tests for the core user journey.
-- [ ] Check authorization, privacy masking, import resilience, and duplicate
+- [x] Run unit and integration suites plus manual browser smoke tests for the
+  core import, reconciliation, exception, claims, and audit workflows.
+- [x] Check authorization, privacy masking, import resilience, and duplicate
   handling.
-- [ ] Run the 100,000-row benchmark and verify no visible dead controls.
+- [x] Run the 100,000-row benchmark and smoke-check primary workflow controls.
+  Populated candidate decisions and formal accessibility review remain open.
 
 ### Milestones 7–8 — Deployment and submission
 

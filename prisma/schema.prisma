@@ -1,0 +1,605 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  FINANCE_EXECUTIVE
+  CO_FOUNDER
+}
+
+enum PartnerKind {
+  WEBSITE
+  MARKETPLACE
+  QUICK_COMMERCE
+  COURIER
+  COD_REMITTER
+}
+
+enum ImportKind {
+  ORDER
+  SETTLEMENT
+  COD_REMITTANCE
+  FREIGHT_INVOICE
+  RETURN_RECEIPT
+  REFUND
+}
+
+enum ImportStatus {
+  MAPPING_REQUIRED
+  PREVIEWED
+  APPROVED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum ImportRowStatus {
+  PENDING
+  VALIDATED
+  INVALID
+  DUPLICATE
+  PROCESSED
+}
+
+enum MappingSuggestionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum PaymentMethod {
+  COD
+  PREPAID
+}
+
+enum OrderDeliveryStatus {
+  PLACED
+  SHIPPED
+  DELIVERED
+  RETURN_TO_WAREHOUSE
+  CANCELLED
+}
+
+enum FinancialRecordKind {
+  SETTLEMENT
+  COD_REMITTANCE
+  FREIGHT_INVOICE
+  REFUND
+}
+
+enum ReturnStatus {
+  EXPECTED
+  RECEIVED
+  OVERDUE
+  REVIEW_REQUIRED
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSED
+  MISMATCH
+}
+
+enum RateComponentKind {
+  MARKETPLACE_FEE
+  PAYMENT_FEE
+  COD_FEE
+  FREIGHT_FEE
+  OTHER
+}
+
+enum RateBasis {
+  PERCENTAGE
+  FLAT_PER_ORDER
+  WEIGHT_SLAB
+}
+
+enum ReconciliationRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum ReconciliationStatus {
+  SETTLED
+  PARTIAL_MATCH
+  SHORT_PAID
+  UNPAID_PAST_DUE
+  FREIGHT_OVERCHARGED
+  RETURN_NOT_RECEIVED
+  REFUND_MISMATCH
+  UNMATCHED_TRANSACTION
+  REVIEW_REQUIRED
+}
+
+enum ExceptionKind {
+  SHORT_PAYMENT
+  UNPAID_PAST_DUE
+  FREIGHT_OVERCHARGE
+  RETURN_NOT_RECEIVED
+  MISSING_ORDER_REFERENCE
+  DUPLICATE_TRANSACTION
+  REFUND_MISMATCH
+  OTHER
+}
+
+enum ExceptionStatus {
+  OPEN
+  IN_REVIEW
+  RESOLVED
+  DISMISSED
+}
+
+enum ClaimStatus {
+  OPEN
+  IN_REVIEW
+  READY_TO_SUBMIT
+  SUBMITTED
+  PARTIALLY_RECOVERED
+  RECOVERED
+  CLOSED
+  DISMISSED
+}
+
+model User {
+  id                    String                   @id @default(uuid()) @db.Uuid
+  email                 String                   @unique @db.VarChar(320)
+  passwordHash          String                   @map("password_hash") @db.VarChar(255)
+  role                  UserRole
+  isActive              Boolean                  @default(true) @map("is_active")
+  createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  sessions              Session[]
+  uploadedBatches       ImportBatch[]            @relation("BatchUploader")
+  approvedMappings      MappingVersion[]         @relation("MappingApprover")
+  decidedSuggestions    MappingSuggestion[]      @relation("SuggestionDecider")
+  decidedMatchSuggestions MatchSuggestion[]      @relation("MatchSuggestionDecider")
+  reconciliationRuns   ReconciliationRun[]      @relation("RunInitiator")
+  auditEvents           AuditLog[]
+
+  @@map("users")
+}
+
+model Session {
+  id          String    @id @default(uuid()) @db.Uuid
+  tokenHash   String    @unique @map("token_hash") @db.Char(64)
+  userId      String    @map("user_id") @db.Uuid
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model LoginRateLimit {
+  keyHash       String   @id @map("key_hash") @db.Char(64)
+  attempts      Int      @default(0)
+  windowStarted DateTime @map("window_started") @db.Timestamptz(6)
+  blockedUntil  DateTime? @map("blocked_until") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([blockedUntil])
+  @@map("login_rate_limits")
+}
+
+model Partner {
+  id                     String                  @id @default(uuid()) @db.Uuid
+  code                   String                  @unique @db.VarChar(80)
+  name                   String                  @db.VarChar(200)
+  kind                   PartnerKind
+  settlementTermsDays    Int?                    @map("settlement_terms_days")
+  isActive               Boolean                 @default(true) @map("is_active")
+  createdAt              DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+  importSources          ImportSource[]
+  ordersAsChannel        Order[]                 @relation("OrderChannel")
+  transactions           FinancialTransaction[]
+  channelRateCards       RateCard[]              @relation("RateCardChannel")
+  courierRateCards       RateCard[]              @relation("RateCardCourier")
+  exceptions             ReconciliationException[]
+  claims                 Claim[]
+  returns                ReturnReceipt[]
+  refunds                Refund[]
+
+  @@index([kind, isActive])
+  @@map("partners")
+}
+
+model ImportSource {
+  id                      String              @id @default(uuid()) @db.Uuid
+  partnerId               String              @map("partner_id") @db.Uuid
+  kind                    ImportKind
+  sourceKey               String              @map("source_key") @db.VarChar(120)
+  activeMappingVersionId  String?             @unique @map("active_mapping_version_id") @db.Uuid
+  createdAt               DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  partner                 Partner             @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  mappingVersions         MappingVersion[]    @relation("SourceMappings")
+  activeMappingVersion    MappingVersion?     @relation("ActiveSourceMapping", fields: [activeMappingVersionId], references: [id], onDelete: SetNull)
+  batches                 ImportBatch[]
+  transactions            FinancialTransaction[]
+  mappingSuggestions      MappingSuggestion[]
+
+  @@unique([partnerId, kind, sourceKey])
+  @@index([partnerId, kind])
+  @@map("import_sources")
+}
+
+model MappingVersion {
+  id                String             @id @default(uuid()) @db.Uuid
+  sourceId          String             @map("source_id") @db.Uuid
+  version           Int
+  mapping           Json
+  previewRows       Json                @map("preview_rows")
+  rollbackOfId      String?             @map("rollback_of_id") @db.Uuid
+  approvedById      String              @map("approved_by_id") @db.Uuid
+  approvedAt        DateTime            @default(now()) @map("approved_at") @db.Timestamptz(6)
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  source            ImportSource        @relation("SourceMappings", fields: [sourceId], references: [id], onDelete: Restrict)
+  activeForSource   ImportSource?       @relation("ActiveSourceMapping")
+  approvedBy        User                @relation("MappingApprover", fields: [approvedById], references: [id], onDelete: Restrict)
+  rollbackOf        MappingVersion?     @relation("MappingRollback", fields: [rollbackOfId], references: [id], onDelete: Restrict)
+  rolledBackAs      MappingVersion[]    @relation("MappingRollback")
+  batches           ImportBatch[]
+
+  @@unique([sourceId, version])
+  @@index([sourceId, approvedAt(sort: Desc)])
+  @@map("mapping_versions")
+}
+
+model MappingSuggestion {
+  id             String                 @id @default(uuid()) @db.Uuid
+  sourceId       String                 @map("source_id") @db.Uuid
+  batchId        String?                @map("batch_id") @db.Uuid
+  proposed       Json
+  confidence     Decimal?               @db.Decimal(5, 4)
+  status         MappingSuggestionStatus @default(PENDING)
+  decidedById    String?                @map("decided_by_id") @db.Uuid
+  decidedAt      DateTime?              @map("decided_at") @db.Timestamptz(6)
+  createdAt      DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  source         ImportSource           @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  batch          ImportBatch?           @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  decidedBy      User?                  @relation("SuggestionDecider", fields: [decidedById], references: [id], onDelete: Restrict)
+
+  @@index([sourceId, status, createdAt])
+  @@map("mapping_suggestions")
+}
+
+model ImportBatch {
+  id                 String              @id @default(uuid()) @db.Uuid
+  sourceId           String              @map("source_id") @db.Uuid
+  mappingVersionId   String?             @map("mapping_version_id") @db.Uuid
+  uploadedById       String              @map("uploaded_by_id") @db.Uuid
+  fileName           String              @map("file_name") @db.VarChar(255)
+  storageKey         String              @map("storage_key") @db.VarChar(1024)
+  contentHash        String              @map("content_hash") @db.Char(64)
+  fileSizeBytes      BigInt              @map("file_size_bytes")
+  status             ImportStatus        @default(MAPPING_REQUIRED)
+  totalRows          Int?                @map("total_rows")
+  processedRows      Int                 @default(0) @map("processed_rows")
+  acceptedRows       Int                 @default(0) @map("accepted_rows")
+  rejectedRows       Int                 @default(0) @map("rejected_rows")
+  duplicateRows      Int                 @default(0) @map("duplicate_rows")
+  previewHeaders     Json?               @map("preview_headers")
+  previewRows        Json?               @map("preview_rows")
+  previewHash        String?             @map("preview_hash") @db.Char(64)
+  errorSummary       Json?               @map("error_summary")
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  completedAt        DateTime?           @map("completed_at") @db.Timestamptz(6)
+  source             ImportSource        @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  mappingVersion     MappingVersion?     @relation(fields: [mappingVersionId], references: [id], onDelete: Restrict)
+  uploadedBy         User                @relation("BatchUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  rows               ImportRow[]
+  mappingSuggestions MappingSuggestion[]
+
+  @@unique([sourceId, contentHash])
+  @@index([sourceId, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+  @@map("import_batches")
+}
+
+model ImportRow {
+  id                String                 @id @default(uuid()) @db.Uuid
+  batchId           String                 @map("batch_id") @db.Uuid
+  rowNumber         Int                    @map("row_number")
+  rawData           Json                   @map("raw_data")
+  normalizedData    Json?                  @map("normalized_data")
+  status            ImportRowStatus        @default(PENDING)
+  validationErrors  Json?                  @map("validation_errors")
+  orderId           String?                @map("order_id") @db.Uuid
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  batch             ImportBatch            @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  order             Order?                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  financialRecord   FinancialTransaction?
+  returnReceipt     ReturnReceipt?
+
+  @@unique([batchId, rowNumber])
+  @@index([batchId, status])
+  @@index([orderId])
+  @@map("import_rows")
+}
+
+model Order {
+  id                 String                  @id @default(uuid()) @db.Uuid
+  channelPartnerId   String                  @map("channel_partner_id") @db.Uuid
+  externalId         String                  @map("external_id") @db.VarChar(120)
+  orderDate          DateTime                @map("order_date") @db.Timestamptz(6)
+  deliveredAt        DateTime?               @map("delivered_at") @db.Timestamptz(6)
+  settlementDueAt    DateTime?               @map("settlement_due_at") @db.Timestamptz(6)
+  paymentMethod      PaymentMethod           @map("payment_method")
+  deliveryStatus     OrderDeliveryStatus     @default(PLACED) @map("delivery_status")
+  orderValue         Decimal                 @map("order_value") @db.Decimal(14, 2)
+  currency           String                  @default("INR") @db.Char(3)
+  createdAt          DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+  channelPartner     Partner                 @relation("OrderChannel", fields: [channelPartnerId], references: [id], onDelete: Restrict)
+  importRows         ImportRow[]
+  transactions       FinancialTransaction[]
+  reconciliationResults ReconciliationResult[]
+  returnReceipts     ReturnReceipt[]
+  refunds            Refund[]
+  matchSuggestions   MatchSuggestion[]
+
+  @@unique([channelPartnerId, externalId])
+  @@index([orderDate])
+  @@index([deliveryStatus, settlementDueAt])
+  @@index([paymentMethod, deliveryStatus])
+  @@map("orders")
+}
+
+model FinancialTransaction {
+  id                  String               @id @default(uuid()) @db.Uuid
+  sourceId            String               @map("source_id") @db.Uuid
+  partnerId           String               @map("partner_id") @db.Uuid
+  importRowId         String               @unique @map("import_row_id") @db.Uuid
+  orderId             String?              @map("order_id") @db.Uuid
+  kind                FinancialRecordKind
+  externalReference   String?              @map("external_reference") @db.VarChar(180)
+  transactionDate     DateTime             @map("transaction_date") @db.Timestamptz(6)
+  currency            String               @db.Char(3)
+  grossAmount         Decimal              @default(0) @map("gross_amount") @db.Decimal(14, 2)
+  feeAmount           Decimal              @default(0) @map("fee_amount") @db.Decimal(14, 2)
+  tcsAmount           Decimal              @default(0) @map("tcs_amount") @db.Decimal(14, 2)
+  tdsAmount           Decimal              @default(0) @map("tds_amount") @db.Decimal(14, 2)
+  netAmount           Decimal              @map("net_amount") @db.Decimal(14, 2)
+  billedWeightKg      Decimal?             @map("billed_weight_kg") @db.Decimal(10, 3)
+  deduplicationKey    String               @map("deduplication_key") @db.VarChar(180)
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  source              ImportSource         @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  partner             Partner              @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  importRow           ImportRow            @relation(fields: [importRowId], references: [id], onDelete: Restrict)
+  order               Order?               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  reconciliationLinks ReconciliationTransaction[]
+  refund              Refund?
+  unmatchedExceptions ReconciliationException[]
+  matchSuggestions    MatchSuggestion[]
+
+  @@unique([sourceId, deduplicationKey])
+  @@index([partnerId, transactionDate])
+  @@index([orderId, kind])
+  @@index([sourceId, transactionDate])
+  @@map("financial_transactions")
+}
+
+model RateCard {
+  id                  String                @id @default(uuid()) @db.Uuid
+  key                 String                @db.VarChar(160)
+  name                String                @db.VarChar(200)
+  version             Int
+  channelPartnerId    String                @map("channel_partner_id") @db.Uuid
+  courierPartnerId    String?               @map("courier_partner_id") @db.Uuid
+  effectiveFrom       DateTime              @map("effective_from") @db.Timestamptz(6)
+  effectiveTo         DateTime?             @map("effective_to") @db.Timestamptz(6)
+  currency            String                @default("INR") @db.Char(3)
+  createdAt           DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  channelPartner      Partner               @relation("RateCardChannel", fields: [channelPartnerId], references: [id], onDelete: Restrict)
+  courierPartner     Partner?              @relation("RateCardCourier", fields: [courierPartnerId], references: [id], onDelete: Restrict)
+  components         RateCardComponent[]
+  reconciliationResults ReconciliationResult[]
+
+  @@unique([key, version])
+  @@index([channelPartnerId, effectiveFrom, effectiveTo])
+  @@index([courierPartnerId, effectiveFrom, effectiveTo])
+  @@map("rate_cards")
+}
+
+model RateCardComponent {
+  id               String             @id @default(uuid()) @db.Uuid
+  rateCardId       String             @map("rate_card_id") @db.Uuid
+  code             String             @db.VarChar(80)
+  kind             RateComponentKind
+  basis            RateBasis
+  rate             Decimal            @db.Decimal(12, 4)
+  currency         String             @default("INR") @db.Char(3)
+  minWeightKg      Decimal?           @map("min_weight_kg") @db.Decimal(10, 3)
+  maxWeightKg      Decimal?           @map("max_weight_kg") @db.Decimal(10, 3)
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  rateCard         RateCard           @relation(fields: [rateCardId], references: [id], onDelete: Restrict)
+
+  @@unique([rateCardId, code])
+  @@index([rateCardId, kind, basis])
+  @@map("rate_card_components")
+}
+
+model ReconciliationRun {
+  id                String                   @id @default(uuid()) @db.Uuid
+  initiatedById     String                   @map("initiated_by_id") @db.Uuid
+  inputFingerprint  String                   @unique @map("input_fingerprint") @db.Char(64)
+  rulesVersion      String                   @map("rules_version") @db.VarChar(40)
+  status            ReconciliationRunStatus   @default(RUNNING)
+  startedAt         DateTime                 @default(now()) @map("started_at") @db.Timestamptz(6)
+  completedAt       DateTime?                @map("completed_at") @db.Timestamptz(6)
+  errorSummary      Json?                    @map("error_summary")
+  initiatedBy       User                     @relation("RunInitiator", fields: [initiatedById], references: [id], onDelete: Restrict)
+  results           ReconciliationResult[]
+
+  @@index([status, startedAt(sort: Desc)])
+  @@map("reconciliation_runs")
+}
+
+model ReconciliationResult {
+  id                 String                  @id @default(uuid()) @db.Uuid
+  runId              String                  @map("run_id") @db.Uuid
+  orderId            String                  @map("order_id") @db.Uuid
+  rateCardId         String?                 @map("rate_card_id") @db.Uuid
+  status             ReconciliationStatus
+  expectedAmount     Decimal                 @map("expected_amount") @db.Decimal(14, 2)
+  receivedAmount     Decimal                 @map("received_amount") @db.Decimal(14, 2)
+  differenceAmount   Decimal                 @map("difference_amount") @db.Decimal(14, 2)
+  currency           String                  @db.Char(3)
+  reasonCodes        Json                    @map("reason_codes")
+  explanation        String                  @db.Text
+  createdAt          DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  run                ReconciliationRun       @relation(fields: [runId], references: [id], onDelete: Restrict)
+  order              Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  rateCard           RateCard?               @relation(fields: [rateCardId], references: [id], onDelete: Restrict)
+  matchedTransactions ReconciliationTransaction[]
+  exceptions         ReconciliationException[]
+
+  @@unique([runId, orderId])
+  @@index([orderId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("reconciliation_results")
+}
+
+model ReconciliationTransaction {
+  resultId      String                @map("result_id") @db.Uuid
+  transactionId String                @map("transaction_id") @db.Uuid
+  result        ReconciliationResult  @relation(fields: [resultId], references: [id], onDelete: Restrict)
+  transaction  FinancialTransaction  @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+
+  @@id([resultId, transactionId])
+  @@index([transactionId])
+  @@map("reconciliation_transactions")
+}
+
+model ReconciliationException {
+  id                String             @id @default(uuid()) @db.Uuid
+  resultId          String?            @map("result_id") @db.Uuid
+  financialTransactionId String?       @map("financial_transaction_id") @db.Uuid
+  partnerId         String             @map("partner_id") @db.Uuid
+  kind              ExceptionKind
+  status            ExceptionStatus    @default(OPEN)
+  amountAtRisk      Decimal            @map("amount_at_risk") @db.Decimal(14, 2)
+  currency          String             @db.Char(3)
+  dueAt             DateTime?           @map("due_at") @db.Timestamptz(6)
+  resolutionNote    String?            @map("resolution_note") @db.Text
+  evidenceSnapshot  Json               @map("evidence_snapshot")
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  result            ReconciliationResult? @relation(fields: [resultId], references: [id], onDelete: Restrict)
+  financialTransaction FinancialTransaction? @relation(fields: [financialTransactionId], references: [id], onDelete: Restrict)
+  partner           Partner            @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  claim             Claim?
+
+  @@unique([resultId, kind])
+  @@unique([financialTransactionId, kind])
+  @@index([partnerId, status, createdAt])
+  @@index([status, dueAt])
+  @@map("reconciliation_exceptions")
+}
+
+model MatchSuggestion {
+  id                    String                   @id @default(uuid()) @db.Uuid
+  financialTransactionId String                  @map("financial_transaction_id") @db.Uuid
+  candidateOrderId      String                   @map("candidate_order_id") @db.Uuid
+  status                MappingSuggestionStatus  @default(PENDING)
+  confidence            Decimal?                 @db.Decimal(5, 4)
+  reason                String                   @db.Text
+  decidedById           String?                  @map("decided_by_id") @db.Uuid
+  decidedAt             DateTime?                @map("decided_at") @db.Timestamptz(6)
+  createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  transaction           FinancialTransaction     @relation(fields: [financialTransactionId], references: [id], onDelete: Restrict)
+  candidateOrder        Order                    @relation(fields: [candidateOrderId], references: [id], onDelete: Restrict)
+  decidedBy             User?                    @relation("MatchSuggestionDecider", fields: [decidedById], references: [id], onDelete: Restrict)
+
+  @@unique([financialTransactionId, candidateOrderId])
+  @@index([status, createdAt])
+  @@map("match_suggestions")
+}
+
+model ReturnReceipt {
+  id                     String       @id @default(uuid()) @db.Uuid
+  partnerId              String       @map("partner_id") @db.Uuid
+  importRowId            String       @unique @map("import_row_id") @db.Uuid
+  orderId                String?      @map("order_id") @db.Uuid
+  externalOrderId        String       @map("external_order_id") @db.VarChar(120)
+  deduplicationKey       String       @map("deduplication_key") @db.VarChar(180)
+  expectedReceiptAt      DateTime?    @map("expected_receipt_at") @db.Timestamptz(6)
+  receivedAt             DateTime?    @map("received_at") @db.Timestamptz(6)
+  warehouseReceiptReference String?   @map("warehouse_receipt_reference") @db.VarChar(180)
+  status                 ReturnStatus @default(REVIEW_REQUIRED)
+  createdAt              DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  partner                Partner      @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  importRow              ImportRow    @relation(fields: [importRowId], references: [id], onDelete: Restrict)
+  order                  Order?       @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  refunds                Refund[]
+
+  @@unique([partnerId, deduplicationKey])
+  @@index([partnerId, status, expectedReceiptAt])
+  @@index([orderId, status])
+  @@map("return_receipts")
+}
+
+model Refund {
+  id                    String          @id @default(uuid()) @db.Uuid
+  partnerId             String          @map("partner_id") @db.Uuid
+  orderId               String          @map("order_id") @db.Uuid
+  returnReceiptId       String?         @map("return_receipt_id") @db.Uuid
+  financialTransactionId String         @unique @map("financial_transaction_id") @db.Uuid
+  expectedAmount        Decimal         @map("expected_amount") @db.Decimal(14, 2)
+  refundedAmount        Decimal         @map("refunded_amount") @db.Decimal(14, 2)
+  currency              String          @db.Char(3)
+  status                RefundStatus
+  createdAt             DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  partner               Partner         @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  order                 Order           @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  returnReceipt         ReturnReceipt?  @relation(fields: [returnReceiptId], references: [id], onDelete: Restrict)
+  financialTransaction FinancialTransaction @relation(fields: [financialTransactionId], references: [id], onDelete: Restrict)
+
+  @@index([partnerId, status, createdAt])
+  @@index([orderId, status])
+  @@map("refunds")
+}
+
+model Claim {
+  id                String       @id @default(uuid()) @db.Uuid
+  exceptionId       String       @unique @map("exception_id") @db.Uuid
+  partnerId         String       @map("partner_id") @db.Uuid
+  status            ClaimStatus  @default(OPEN)
+  claimAmount       Decimal      @map("claim_amount") @db.Decimal(14, 2)
+  recoveredAmount   Decimal      @default(0) @map("recovered_amount") @db.Decimal(14, 2)
+  currency          String       @db.Char(3)
+  partnerCaseRef    String?      @map("partner_case_ref") @db.VarChar(180)
+  evidenceSnapshot  Json         @map("evidence_snapshot")
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  exception         ReconciliationException @relation(fields: [exceptionId], references: [id], onDelete: Restrict)
+  partner           Partner      @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+
+  @@index([partnerId, status, createdAt])
+  @@map("claims")
+}
+
+model AuditLog {
+  id          String    @id @default(uuid()) @db.Uuid
+  actorId     String?   @map("actor_id") @db.Uuid
+  action      String    @db.VarChar(120)
+  entityType  String    @map("entity_type") @db.VarChar(120)
+  entityId    String    @map("entity_id") @db.VarChar(120)
+  details     Json
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  actor       User?     @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([entityType, entityId, createdAt(sort: Desc)])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@map("audit_logs")
+}

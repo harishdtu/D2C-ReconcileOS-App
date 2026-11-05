@@ -19,10 +19,23 @@
 
 # production
 /build
+/.data/
+/ReconcileOS-Final-Submission.zip
+/submission/
 
 # misc
 .DS_Store
 *.pem
+/credentials/
+credentials.json
+*.sqlite
+*.sqlite3
+*.db
+*.tmp
+*.temp
+*.swp
+*.bak
+*~
 
 # debug
 npm-debug.log*
